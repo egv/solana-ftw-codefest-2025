@@ -1,0 +1,76 @@
+#include "imports/stdlib.fc";
+
+const op::increment = 1;
+const op::decrement = 2;
+const op::reset = 3;
+const op::get_count = 4;
+
+(int, int) load_data() inline {
+    slice ds = get_data().begin_parse();
+    return (ds~load_uint(64), ds~load_uint(256)); ;; (count, owner)
+}
+
+() save_data(int count, int owner) impure inline {
+    set_data(begin_cell()
+        .store_uint(count, 64)
+        .store_uint(owner, 256)
+        .end_cell());
+}
+
+() recv_internal(int my_balance, int msg_value, cell in_msg_full, slice in_msg_body) impure {
+    if (in_msg_body.slice_empty?()) {
+        return ();
+    }
+    
+    slice cs = in_msg_full.begin_parse();
+    int flags = cs~load_uint(4);
+    slice sender_addr = cs~load_msg_addr();
+    int sender_wc = sender_addr~load_int(8);
+    int sender_addr_hash = sender_addr~load_uint(256);
+    
+    int op = in_msg_body~load_uint(32);
+    (int count, int owner) = load_data();
+    
+    if (op == op::increment) {
+        count += 1;
+        save_data(count, owner);
+    }
+    
+    if (op == op::decrement) {
+        throw_unless(100, count > 0); ;; "Счетчик не может быть отрицательным"
+        count -= 1;
+        save_data(count, owner);
+    }
+    
+    if (op == op::reset) {
+        throw_unless(101, sender_addr_hash == owner); ;; "Только владелец может сбросить счетчик"
+        count = 0;
+        save_data(count, owner);
+    }
+    
+    if (op == op::get_count) {
+        cell msg = begin_cell()
+            .store_uint(0x18, 6)
+            .store_slice(sender_addr)
+            .store_coins(0)
+            .store_uint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
+            .store_ref(
+                begin_cell()
+                    .store_uint(0, 32)
+                    .store_uint(count, 64)
+                .end_cell()
+            )
+        .end_cell();
+        
+        send_raw_message(msg, 64);
+    }
+}
+
+() recv_external(slice in_msg) impure {
+    accept_message();
+    
+    slice cs = in_msg.skip_bits(512); ;; skip signature
+    int owner = cs~load_uint(256);
+    
+    save_data(0, owner); ;; initialize with count = 0
+}
